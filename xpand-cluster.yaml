@@ -1,0 +1,655 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to Create an EC2 instance in a VPC
+   
+Parameters:
+
+  ImageIdXpand:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::ImageIdXpand>'
+    Description: YOUR_IMAGE_ID
+    Default: ImageIdXpand
+  VpcId:
+    Type: String
+    Description: VPC id
+    Default: vpc-07377e6c
+  SubnetId:
+    Type: String
+    Description: Subnet in which to launch an EC2
+    Default: subnet-06377e6d
+  AvailabilityZone:
+    Type: String
+    Description: Availability Zone into which instance will launch
+    Default: us-west-2a
+  InstanceType:
+    Type: String
+    Description: Choosing  i3.4xlarge  because need nvme - cost 1.248/hr
+    Default: i3.4xlarge
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH Keypair to login to the instance
+    Default: mmalgeri777-keypair-mdb
+  MyIp:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::MyIp>'
+    Description: MY_IP
+    Default: MyIp
+  XpandIpRange:
+    Type: String
+    Description: Xpand Ip Range
+    Default: 172.31.32.0/20
+  xpandIp1:
+    Type: String
+    Description: Demo Xpand Ip 1
+    Default: 172.31.42.22
+  xpandIp2:
+    Type: String
+    Description: Demo Xpand Ip 2
+    Default: 172.31.42.23
+  xpandIp3:
+    Type: String
+    Description: Demo Xpand Ip 3
+    Default: 172.31.42.24
+  DemoIpMaxScale:
+    Type: String
+    Description: Demo Xpand Ip MaxScale
+    Default: 172.31.42.25
+  xpandToken:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandToken>'
+    Description: YOUR_TOKEN
+    Default: xpandToken
+  xpandLicenseSignature:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseSignature>'
+    Description: YOUR_LICENSE_SIGNATURE
+    Default: xpandLicenseSignature
+  xpandLicenseEmail:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseEmail>'
+    Description: YOUR_LICENSE__EMAIL
+    Default: xpandLicenseEmail
+  xpandLicensePerson:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicensePerson>'
+    Description: YOUR_LICENSE_PERSON
+    Default: xpandLicensePerson
+  xpandLicenseCompany:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseCompany>'
+    Description: YOUR_LICENSE_COMPANY
+    Default: xpandLicenseCompany
+  xpandLicenseExpiration:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseExpiration>'
+    Description: YOUR_LICENSE_EXPIRATION
+    Default: xpandLicenseExpiration
+  xpandPassword:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandPassword>'
+    Description: YOUR_PASSWORD
+    Default: xpandPassword
+  xpandVersion:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandVersion>'
+    Description: YOUR_XPAND_VERSION
+    Default: xpandVersion
+  xpandVersionDir:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandVersionDir>'
+    Description: YOUR_XPAND_VERSION_DIR
+    Default: xpandVersionDir
+
+Resources:
+  xpand1:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdXpand
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref xpandIp1
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: xpand1
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+            echo "Change centos password" 
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd centos
+            
+            echo "Installing Xpand software"
+            yum -y update
+            echo "Updated yum"
+            echo "get private ip address"
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip 
+            sudo yum -y install  bzip2 mdadm nmap ntp ntpdate screen sysstat wget xz git
+            echo "Installed base level software on xpand1"
+
+            echo "Creating raid devices, filesystem, data directory, and mounting"
+            sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme0n1 /dev/nvme1n1
+            sudo mkfs.ext4 /dev/md0
+            sudo mkdir /data
+            sudo mount /dev/md0 /data
+            sudo echo "/dev/md0 /data ext4 defaults,noatime,nodiratime 0 1" >> /etc/fstab
+            sudo systemctl enable ntpd
+            sudo systemctl start ntpd
+            echo "Done creating raid devices, filesystem, data directory, and mounting"
+            echo "Also started ntpd"
+            echo "Getting xpand software"
+            sudo cd /
+            sudo wget https://dlm.mariadb.com/${xpandToken}/xpand/${xpandVersionDir}/${xpandVersion}.tar.bz2
+            sudo tar xvf ${xpandVersion}.tar.bz2
+            cd /${xpandVersion}
+            sudo ./xpdnode_install.py -y
+            echo "Done running python install script. Can test GUI on port 8080"
+            echo "Now get mariadb repo"
+            cd /
+            sudo wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            ./mariadb_es_repo_setup --token=${xpandToken} --apply --mariadb-server-version="10.6"
+            sudo yum -y install MariaDB-client
+
+            sudo chmod 777 /home/xpand/.bash_profile
+            sudo echo "PATH=$PATH:/opt/clustrix/bin; export PATH" >> /home/xpand/.bash_profile
+
+            echo "Create setGlobalLicense.sql and move to /home/xpand directory "
+            echo "Setting global license number ${xpandLicenseSignature}"
+            echo "SET GLOBAL LICENSE = '{\"expiration\":\"${xpandLicenseExpiration}\",\"company\":\"${xpandLicenseCompany}\",\"email\":\"${xpandLicenseEmail}\",\"person\":\"${xpandLicensePerson}\",\"signature\":\"${xpandLicenseSignature}\"}';" >> /setGlobalLicense.sql
+            sudo mv /setGlobalLicense.sql /home/xpand/setGlobalLicense.sql
+            sudo chown xpand /home/xpand/setGlobalLicense.sql
+            sudo chgrp xpand /home/xpand/setGlobalLicense.sql
+            sudo chmod +x /home/xpand/setGlobalLicense.sql
+            echo "Moved setGlobalLicense.sql to /home/xpand directory and changed user/group ownership "
+
+            echo "Create sql file to give proper GRANTs to xpand user"
+            echo "GRANT ALL ON *.* TO xpand@'localhost' IDENTIFIED BY '${xpandPassword}';" >> /grantToXpand.sql
+            sudo mariadb < /grantToXpand.sql
+            echo "Done giving proper GRANTs to xpand user"
+
+            echo "Change xpand user password"
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd xpand
+            sudo chmod 777 /home/xpand
+
+            echo "Run this as sudo, not xpand user. NOT SURE IF THIS IS CORRECT BUT SEEMS TO WORK"
+            sudo mariadb < /home/xpand/setGlobalLicense.sql
+
+            echo "Done executing commands as xpand user"
+            echo "Creating sql file for GRANTS"
+            echo "GRANT ALL ON *.* TO root@'localhost' IDENTIFIED BY '${xpandPassword}';" >> /setGrants.sql
+            sudo mariadb < /setGrants.sql            
+            
+            echo "Added license and set GRANTS"
+
+            sudo echo "Creating sql file to add remaining nodes to cluster"
+            sudo echo "ALTER CLUSTER ADD '${xpandIp2}', '${xpandIp3}';" >> /addNodesToCluster.sql
+            sudo mariadb < /addNodesToCluster.sql
+            echo "Added remaining nodes to cluster from xpand1"
+
+            echo "Confirm SSH daemon configuration"
+            sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            sudo sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords no/g' /etc/ssh/sshd_config
+
+            sudo awk '/#PasswordAuthentication yes/{print "PubkeyAuthentication yes"}1' /etc/ssh/sshd_config > /tmp/sshd_config
+            sudo mv /tmp/sshd_config /etc/ssh
+
+            echo "Restarting sshd"
+            sudo systemctl restart sshd
+
+            echo "Installing expect"
+            sudo yum -y install expect
+
+            echo "Running an expect script to install public keys"
+            /usr/bin/expect -c '
+            expect <<- DONE
+            spawn clx pubkeyinstall
+            expect "?Enter SSH*"
+            send -- "${xpandPassword}\r"
+            expect eof
+            DONE'
+
+            echo "Done installing public keys"
+
+            echo "Create maxuser so that MaxScale install configuration can be completed"
+
+            echo "Creating sql file for maxscale user and GRANTS"
+            echo "CREATE USER 'maxscale'@${DemoIpMaxScale} IDENTIFIED BY '${xpandPassword}';" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SELECT ON system.membership TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SELECT ON system.nodes TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SELECT ON system.nodeinfo TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SELECT ON system.sessions TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SELECT ON system.softfiled_nodes TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SELECT ON system.user_acl TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SELECT ON system.users TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SHOW DATABASES ON *.* TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+            echo "GRANT SUPER ON *.* TO 'maxscale'@${DemoIpMaxScale};" >> /setMaxScaleUserAndGrants.sql
+
+
+            sudo mv /setMaxScaleUserAndGrants.sql /home/xpand/setMaxScaleUserAndGrants.sql
+            sudo chown xpand /home/xpand/setMaxScaleUserAndGrants.sql
+            sudo chgrp xpand /home/xpand/setMaxScaleUserAndGrants.sql
+            sudo chmod +x /home/xpand/setMaxScaleUserAndGrants.sql
+            echo "Moved setMaxScaleUserAndGrants.sql to /home/xpand directory and changed user/group ownership "
+
+            echo "Change file access level"
+            sudo chmod 777 /home/xpand/setMaxScaleUserAndGrants.sql
+            echo "Run this as sudo, not xpand user. NOT SURE IF THIS IS CORRECT BUT SEEMS TO WORK"
+            sudo mariadb < /home/xpand/setMaxScaleUserAndGrants.sql
+
+
+
+  xpand2:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdXpand
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref xpandIp2
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: xpand2
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+            echo "Change centos password" 
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd centos
+            
+            echo "Installing Xpand software"
+            yum -y update
+            echo "Updated yum"
+            echo "get private ip address"
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip 
+            sudo yum -y install  bzip2 mdadm nmap ntp ntpdate screen sysstat wget xz git
+            echo "Installed base level software on xpand2"
+
+            echo "Creating raid devices, filesystem, data directory, and mounting"
+            sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme1n1 /dev/nvme2n1
+            sudo mkfs.ext4 /dev/md0
+            sudo mkdir /data
+            sudo mount /dev/md0 /data
+            sudo echo "/dev/md0 /data ext4 defaults,noatime,nodiratime 0 2" >> /etc/fstab
+            sudo systemctl enable ntpd
+            sudo systemctl start ntpd
+            echo "Done creating raid devices, filesystem, data directory, and mounting"
+            echo "Also started ntpd"
+
+            echo "Creating raid devices, filesystem, data directory, and mounting"
+            sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme0n1 /dev/nvme1n1
+            sudo mkfs.ext4 /dev/md0
+            sudo mkdir /data
+            sudo mount /dev/md0 /data
+            sudo echo "/dev/md0 /data ext4 defaults,noatime,nodiratime 0 1" >> /etc/fstab
+            sudo systemctl enable ntpd
+            sudo systemctl start ntpd
+            echo "Done creating raid devices, filesystem, data directory, and mounting"
+            echo "Also started ntpd"
+            echo "Getting xpand software"
+            sudo wget https://dlm.mariadb.com/${xpandToken}/xpand/${xpandVersionDir}/${xpandVersion}.tar.bz2
+            cd /
+            sudo tar xvf ${xpandVersion}.tar.bz2
+            cd /${xpandVersion}
+            sudo ./xpdnode_install.py -y
+            echo "Done running python install script. Can test GUI on port 8080"
+            echo "Now get mariadb repo"
+            cd /
+            sudo wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            ./mariadb_es_repo_setup --token=${xpandToken} --apply --mariadb-server-version="10.6"
+            sudo yum -y install MariaDB-client
+
+            sudo chmod 777 /home/xpand/.bash_profile
+            sudo echo "PATH=$PATH:/opt/clustrix/bin; export PATH" >> /home/xpand/.bash_profile
+
+            echo "Creating sql file for GRANTS"
+            echo "GRANT ALL ON *.* TO root@'localhost' IDENTIFIED BY '${xpandPassword}';" >> /setGrants.sql
+            sudo mariadb < /setGrants.sql
+            
+            echo "Set GRANTS on xpand2"
+
+            echo "Change xpand password"
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd xpand
+
+            echo "Confirm SSH daemon configuration"
+            sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            sudo sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords no/g' /etc/ssh/sshd_config
+
+            sudo awk '/#PasswordAuthentication yes/{print "PubkeyAuthentication yes"}1' /etc/ssh/sshd_config > /tmp/sshd_config
+            sudo mv /tmp/sshd_config /etc/ssh
+
+            sudo systemctl restart sshd
+          
+
+
+  xpand3:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdXpand
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref xpandIp3
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: xpand3
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+            echo "Change centos password" 
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd centos
+            
+            echo "Installing Xpand software"
+            yum -y update
+            echo "Updated yum"
+            echo "get private ip address"
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip 
+            sudo yum -y install  bzip2 mdadm nmap ntp ntpdate screen sysstat wget xz git
+            echo "Installed base level software on xpand3"
+
+            echo "Creating raid devices, filesystem, data directory, and mounting"
+            sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme0n1 /dev/nvme1n1
+            sudo mkfs.ext4 /dev/md0
+            sudo mkdir /data
+            sudo mount /dev/md0 /data
+            sudo echo "/dev/md0 /data ext4 defaults,noatime,nodiratime 0 1" >> /etc/fstab
+            sudo systemctl enable ntpd
+            sudo systemctl start ntpd
+            echo "Done creating raid devices, filesystem, data directory, and mounting"
+            echo "Also started ntpd"
+            echo "Getting xpand software"
+            sudo wget https://dlm.mariadb.com/${xpandToken}/xpand/${xpandVersionDir}/${xpandVersion}.tar.bz2
+            cd /
+            sudo tar xvf ${xpandVersion}.tar.bz2
+            cd /${xpandVersion}
+            sudo ./xpdnode_install.py -y
+            echo "Done running python install script. Can test GUI on port 8080"
+            echo "Now get mariadb repo"
+            cd /
+            sudo wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            ./mariadb_es_repo_setup --token=${xpandToken} --apply --mariadb-server-version="10.6"
+            sudo yum -y install MariaDB-client
+
+            sudo chmod 777 /home/xpand/.bash_profile
+            sudo echo "PATH=$PATH:/opt/clustrix/bin; export PATH" >> /home/xpand/.bash_profile
+
+            echo "Creating sql file for GRANTS"
+            echo "GRANT ALL ON *.* TO root@'localhost' IDENTIFIED BY '${xpandPassword}';" >> /setGrants.sql
+            sudo mariadb < /setGrants.sql
+            
+            echo "Set GRANTS on xpand3"
+
+            echo "Change xpand password"
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd xpand
+
+            echo "Confirm SSH daemon configuration"
+            sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            sudo sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords no/g' /etc/ssh/sshd_config
+
+            sudo awk '/#PasswordAuthentication yes/{print "PubkeyAuthentication yes"}1' /etc/ssh/sshd_config > /tmp/sshd_config
+            sudo mv /tmp/sshd_config /etc/ssh
+
+            sudo systemctl restart sshd
+  
+  # Check cluster log file with tail -f /data/clustrix/log/clustrix.log
+  # Check cluster status with # sudo su - xpand; clx status
+  # GUI at pubip:8080  creds noreply@mariadb.com/mariadb
+
+
+
+  demomaxscale:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdXpand
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref DemoIpMaxScale
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: demomaxscale
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+            echo "Change centos password" 
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd centos
+            
+            echo "Installing Maxscale software"
+            yum -y update
+            echo "Updated yum"
+            echo "get private ip address"
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip 
+            sudo yum -y install  vsftp nc wget git
+
+            echo "Now get mariadb repo"
+            cd /
+            sudo wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            sudo ./mariadb_es_repo_setup --token=${xpandToken} --apply --skip-server --skip-tools --mariadb-maxscale-version="6.3.1"
+            sudo yum -y install maxscale
+
+            # Add lines after [threads=auto]
+            sudo awk '/threads/{print;print "admin_host=0.0.0.0";next}1' /etc/maxscale.cnf > /tmp/maxscaletmp.cnf
+            sudo awk '/admin_host/{print;print "admin_secure_gui=false";next}1' /tmp/maxscaletmp.cnf > /tmp/maxscaletmp2.cnf
+            audo awk '{print}/address of a MariaDB server/{exit}' /tmp/maxscaletmp2.cnf /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+            sudo cp /tmp/maxscale.cnf /etc/maxscale.cnf
+
+            sudo systemctl restart maxscale
+
+            echo "Add xpand nodes with IP addresses of  ${xpandIp1} and ${xpandIp2} and ${xpandIp3}"
+            sudo maxctrl create server xpand1 ${xpandIp1}
+            sudo maxctrl create server xpand2 ${xpandIp2}
+            sudo maxctrl create server xpand3 ${xpandIp3}
+
+            echo "Create monitor"
+            sudo maxctrl create monitor xpand_monitor xpandmon --servers xpand1 xpand2 xpand3 --monitor-user=maxscale --monitor-password='${xpandPassword}'
+
+            echo "Create R/W splitter"
+            sudo maxctrl create service xpand_service readwritesplit user=maxscale password='${xpandPassword}' --servers xpand1 xpand2 xpand3
+
+            echo "Create listener"
+            sudo maxctrl create listener xpand_service xpand_listener 3306 --protocol=MariaDBClient
+
+            echo "Create  /etc/maxscale.cnf file for when rebooting. Start with /tmp/maxscale.cnf"
+
+            sudo echo "# MaxScale documentation:" >> /tmp/maxscale.cnf
+            sudo echo "# https://mariadb.com/kb/en/mariadb-maxscale-6/" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+            sudo echo "# Global parameters" >> /tmp/maxscale.cnf
+            sudo echo "#" >> /tmp/maxscale.cnf
+            sudo echo "# Complete list of configuration options:" >> /tmp/maxscale.cnf
+            sudo echo "# https://mariadb.com/kb/en/mariadb-maxscale-6-mariadb-maxscale-configuration-guide/" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+            sudo echo "[maxscale]" >> /tmp/maxscale.cnf
+            sudo echo "threads=auto" >> /tmp/maxscale.cnf
+            sudo echo "admin_host=0.0.0.0" >> /tmp/maxscale.cnf
+            sudo echo "admin_secure_gui=false" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+            sudo echo "[xpand1]" >> /tmp/maxscale.cnf
+            sudo echo "type=server" >> /tmp/maxscale.cnf
+            sudo echo "address=${xpandIp1}" >> /tmp/maxscale.cnf
+            sudo echo "port=3306" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+
+            sudo echo "[xpand2]" >> /tmp/maxscale.cnf
+            sudo echo "type=server" >> /tmp/maxscale.cnf
+            sudo echo "address=${xpandIp2}" >> /tmp/maxscale.cnf
+            sudo echo "port=3306" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+
+            sudo echo "[xpand3]" >> /tmp/maxscale.cnf
+            sudo echo "type=server" >> /tmp/maxscale.cnf
+            sudo echo "address=${xpandIp3}" >> /tmp/maxscale.cnf
+            sudo echo "port=3306" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+
+            sudo echo "[xpand_monitor]" >> /tmp/maxscale.cnf
+            sudo echo "type=monitor" >> /tmp/maxscale.cnf
+            sudo echo "module=xpandmon" >> /tmp/maxscale.cnf
+            sudo echo "servers=xpand1,xpand2,xpand3" >> /tmp/maxscale.cnf
+            sudo echo "user=maxscale" >> /tmp/maxscale.cnf
+            sudo echo "password=${xpandPassword}" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+            sudo echo "[xpand_service]" >> /tmp/maxscale.cnf
+            sudo echo "type=service" >> /tmp/maxscale.cnf
+            sudo echo "router=readconnroute" >> /tmp/maxscale.cnf
+            sudo echo "cluster=xpand_monitor" >> /tmp/maxscale.cnf
+            sudo echo "user=maxscale" >> /tmp/maxscale.cnf
+            sudo echo "password=${xpandPassword}" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+            sudo echo "[xpand_listener]" >> /tmp/maxscale.cnf
+            sudo echo "type=listener" >> /tmp/maxscale.cnf
+            sudo echo "service=xpand_service" >> /tmp/maxscale.cnf
+            sudo echo "protocol=MariaDBClient" >> /tmp/maxscale.cnf
+            sudo echo "port=3306" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+            sudo echo "" >> /tmp/maxscale.cnf
+
+            sudo cp /tmp/maxscale.cnf /etc/maxscale.cnf
+            sudo chown root /etc/maxscale.cnf
+            sudo chgrp root /etc/maxscale.cnf
+            sudo chmod 755 /etc/maxscale.cnf
+
+            echo "Done creating /tmp/maxscale.cnf file, and moving to /etc/maxscale.cnf with proper user/group/access settings "
+
+
+
+  DemoSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow SSH access via port 22
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref MyIp
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '3581'
+          ToPort: '3581'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '8080'
+          ToPort: '8080'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '2048'
+          ToPort: '2048'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: udp
+          FromPort: '2048'
+          ToPort: '2048'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '2424'
+          ToPort: '2424'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: udp
+          FromPort: '2424'
+          ToPort: '2424'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '7888'
+          ToPort: '7888'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '3581'
+          ToPort: '3581'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '8989'
+          ToPort: '8989'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '24378'
+          ToPort: '24410'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: udp
+          FromPort: '24378'
+          ToPort: '24410'
+          CidrIp: !Ref XpandIpRange
+      Tags:
+        - Key: Name
+          Value: SSH-SG
+
+  DemoHttpSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow HTTP access via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref MyIp
+        - IpProtocol: tcp
+          FromPort: '8080'
+          ToPort: '8080'
+          CidrIp: !Ref MyIp
+      Tags:
+        - Key: Name
+          Value: SSH-HTTPD
+
+Outputs:
+  DemoInstanceId:
+    Description: Instance Id 
+    Value: !Ref xpand1

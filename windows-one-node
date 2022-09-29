@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to Create an EC2 instance in a VPC
+   
+Parameters:
+
+  ImageIDWindows:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::ImageIDWindows>'
+    Description: YOUR_IMAGE_ID
+    Default: ImageIDWindows
+  VpcId:
+    Type: String
+    Description: VPC id
+    Default: vpc-07377e6c
+  SubnetId:
+    Type: String
+    Description: Subnet in which to launch an EC2
+    Default: subnet-06377e6d
+  AvailabilityZone:
+    Type: String
+    Description: Availability Zone into which instance will launch
+    Default: us-west-2a
+  InstanceType:
+    Type: String
+    Description: Instance type
+    Default: i3.4xlarge
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH Keypair to login to the instance
+    Default: mmalgeri777-keypair-mdb
+  MyIp:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::MyIp>'
+    Description: MY_IP
+    Default: MyIp
+  DemoIpRange:
+    Type: String
+    Description: Demo Ip Range
+    Default: 172.31.32.0/20
+  windowsIp1:
+    Type: String
+    Description: Demo Ip 1
+    Default: 172.31.42.97
+  
+
+Resources:
+  windows1:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIDWindows
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref windowsIp1
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: windows1
+
+  DemoSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow SSH access via port 22
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref MyIp
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref DemoIpRange
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          CidrIp: !Ref DemoIpRange
+        - IpProtocol: tcp
+          FromPort: '3389'
+          ToPort: '3389'
+          CidrIp: !Ref MyIp
+      Tags:
+        - Key: Name
+          Value: SSH-SG
+
+  DemoHttpSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow HTTP access via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref MyIp
+      Tags:
+        - Key: Name
+          Value: SSH-HTTPD
+
+Outputs:
+  DemoInstanceId:
+    Description: Instance Id 
+    Value: !Ref windows1

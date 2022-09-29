@@ -1,0 +1,502 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to Create an EC2 instance in a VPC
+   
+Parameters:
+
+  ImageIdPriRep:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::ImageIdPriRep>'
+    Description: YOUR_IMAGE_ID
+    Default: ImageIdPriRep
+  VpcId:
+    Type: String
+    Description: VPC id
+    Default: vpc-07377e6c
+  SubnetId:
+    Type: String
+    Description: Subnet in which to launch an EC2
+    Default: subnet-06377e6d
+  AvailabilityZone:
+    Type: String
+    Description: Availability Zone into which instance will launch
+    Default: us-west-2a
+  InstanceType:
+    Type: String
+    Description: Choosing  t2 small because it is low cost and OK for most demos
+    Default: t2.small
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH Keypair to login to the instance
+    Default: mmalgeri777-keypair-mdb
+  MyIp:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::MyIp>'
+    Description: MY_IP
+    Default: MyIp
+  DemoIpRange:
+    Type: String
+    Description: Demo Ip Range
+    Default: 172.31.32.0/20
+  DemoIp1:
+    Type: String
+    Description: Demo Ip 1
+    Default: 172.31.42.12
+  DemoIp2:
+    Type: String
+    Description: Demo Ip 2
+    Default: 172.31.42.13
+  DemoIp3:
+    Type: String
+    Description: Demo Ip 3
+    Default: 172.31.42.14
+  DemoIpMaxScale:
+    Type: String
+    Description: Demo Ip MaxScale
+    Default: 172.31.42.15
+  primaryReplicaToken:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaToken>'
+    Description: YOUR_TOKEN
+    Default: primaryReplicaToken
+  primaryReplicaPassword:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaPassword>'
+    Description: YOUR_PASSWORD
+    Default: primaryReplicaPassword
+  primaryReplicaVersion:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaVersion>'
+    Description: YOUR_MARIADB_VERSION
+    Default: primaryReplicaVersion
+  primaryReplicaMaxScaleVersion:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaMaxScaleVersion>'
+    Description: YOUR_MAXSCALE_VERSION
+    Default: primaryReplicaMaxScaleVersion
+  primaryReplicaMaxScaleUserNetwork:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaMaxScaleUserNetwork>'
+    Description: YOUR_MAXSCALE_USER_NETWORK
+    Default: primaryReplicaMaxScaleUserNetwork
+
+Resources:
+  demoserver1:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdPriRep
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref DemoIp1
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: demoserver1
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            echo "Installing mariadb enterprise" 
+            yum update -y
+            echo "Updated yum" 
+            echo "get private ip address" 
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip  
+            sudo yum -y install wget
+            echo "Installed wget and now getting mariadb repo" 
+            wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            echo "Got repo and made it executable" 
+            ./mariadb_es_repo_setup --token=${primaryReplicaToken} --apply --mariadb-server-version="${primaryReplicaVersion}"
+            echo "Installed repo, now installing MariaDB-server" 
+            sudo yum -y install MariaDB-server
+            echo "Done installing MariaDB-server" 
+            sleep 10
+            sudo systemctl start mariadb
+            sudo systemctl enable mariadb
+            echo "Done installing, starting, and enabling MariaDB-server and installing MariaDB-backup " 
+            echo "Modifying mysql-clients.cnf file" 
+            sudo sed -i '4i [client]' /etc/my.cnf.d/mysql-clients.cnf
+            sudo sed -i '5i password=${primaryReplicaPassword}' /etc/my.cnf.d/mysql-clients.cnf
+            echo "Installing sshpass" 
+            sudo yum -y install sshpass
+            echo "Stopping and disabling firewalld" 
+            sudo systemctl stop firewalld
+            sudo systemctl disable firewalld 
+            echo "firewalld stopped and disabled" 
+            sudo sed -i 's/\[mariadb\]//' /etc/my.cnf.d/server.cnf
+            sudo echo "#### PRIMARY SERVER CONFIGURATION" >> /etc/my.cnf.d/server.cnf
+            sudo echo "server_id            = 1" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log_basename         = primary1" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log-bin              = /var/log/mariadb/primary1-bin" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log-bin-index        = /var/log/mariadb/primary1-bin.index" >> /etc/my.cnf.d/server.cnf
+            sudo echo "binlog_format        = ROW" >> /etc/my.cnf.d/server.cnf
+            sudo echo "expire_logs_days     = 10" >> /etc/my.cnf.d/server.cnf
+            echo "Creating log directory and changing ownership to mysql" 
+            sudo mkdir /var/log/mariadb
+            sudo chown -R mysql:mysql /var/log/mariadb
+            echo "Restarting mariadb after adding entries to server.cnf file" 
+            sudo systemctl restart mariadb
+            echo "Creating sql file to create repuser" 
+            sudo echo "GRANT RELOAD, REPLICATION SLAVE ON *.* TO repuser@'${DemoIp1}' IDENTIFIED BY '${primaryReplicaPassword}';" >> createRepUser.sql
+            sudo echo "GRANT RELOAD, REPLICATION SLAVE ON *.* TO repuser@'${DemoIp2}' IDENTIFIED BY '${primaryReplicaPassword}';" >> createRepUser.sql
+            sudo echo "GRANT RELOAD, REPLICATION SLAVE ON *.* TO repuser@'${DemoIp3}' IDENTIFIED BY '${primaryReplicaPassword}';" >> createRepUser.sql
+            echo "Created sql file to create repuser now running it" 
+            sudo mariadb < createRepUser.sql
+            echo "Successfully created repuser" 
+            echo "Start and enable MariaDB-server" 
+            sudo systemctl start mariadb
+            sudo systemctl enable mariadb
+            echo "MariaDB-server started and enabled" 
+            echo "Not running maraidb-secure-installation" 
+            echo "Obtain position from primary database and write to a file" 
+            sudo mariadb -e "show master status\G" | awk "NR==3" | awk -F ':' '{print $2}' >> /tmp/primaryPosition.txt
+            sudo sed -r 's/\s+//g' /tmp/primaryPosition.txt > /tmp/primaryPos2.txt
+            echo "Creating full dump of primary" 
+            sudo mariadb-dump --master-data=2 --all-databases --single-transaction > /tmp/fulldump.sql
+            echo "Transfering full dump and primaryPosition value of primary to replica with sshpass" 
+            sshpass -p "${primaryReplicaPassword}" scp -qo StrictHostKeyChecking=no /tmp/fulldump.sql ec2-user@${DemoIp2}:/tmp
+            sshpass -p "${primaryReplicaPassword}" scp -qo StrictHostKeyChecking=no /tmp/fulldump.sql ec2-user@${DemoIp3}:/tmp
+            sshpass -p "${primaryReplicaPassword}" scp -qo StrictHostKeyChecking=no /tmp/primaryPos2.txt ec2-user@${DemoIp2}:/tmp
+            sshpass -p "${primaryReplicaPassword}" scp -qo StrictHostKeyChecking=no /tmp/primaryPos2.txt ec2-user@${DemoIp3}:/tmp
+            echo "Done transfering full dump and primaryPosition value of primary to replica" 
+            sudo echo "Now setting up for MaxScale connectivity" 
+            sudo echo "Creating sql file to create maxuser and appuser" 
+            sudo echo "CREATE USER maxuser@'${primaryReplicaMaxScaleUserNetwork}' IDENTIFIED BY '${primaryReplicaPassword}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT SUPER, RELOAD, REPLICATION CLIENT, REPLICATION SLAVE, SHOW DATABASES ON *.* TO maxuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT SELECT ON mysql.db TO maxuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT SELECT ON mysql.user TO maxuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT SELECT ON mysql.roles_mapping TO maxuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT SELECT ON mysql.tables_priv TO maxuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT SELECT ON mysql.columns_priv TO maxuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT SELECT ON mysql.proxies_priv TO maxuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "CREATE USER appuser@'${primaryReplicaMaxScaleUserNetwork}' IDENTIFIED BY '${primaryReplicaPassword}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo echo "GRANT ALL ON *.* TO appuser@'${primaryReplicaMaxScaleUserNetwork}';" >> /tmp/createMaxAndAppUsers.sql
+            sudo mariadb < /tmp/createMaxAndAppUsers.sql  
+            
+
+  demoserver2:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdPriRep
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref DemoIp2
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: demoserver2
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            echo "Enable password authentication" 
+            sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            echo "Change ec2-user password" 
+            echo -e "${primaryReplicaPassword}\n${primaryReplicaPassword}" | sudo passwd ec2-user
+            echo "Changed ec2-user password" 
+            echo "restarting sshd" 
+            sudo systemctl restart sshd
+            echo "Installing mariadb enterprise" 
+            exec > >(tee /tmp/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            yum update -y
+            echo "Updated yum" 
+            echo "get private ip address" 
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip  
+            echo "Sleeping for 4 minutes" 
+            sleep 240
+            echo "Waking up after 4 minute sleep" 
+            sudo yum -y install wget
+            echo "Installed wget" 
+            wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            echo "Got repo and made it executable" 
+            ./mariadb_es_repo_setup --token=${primaryReplicaToken} --apply --mariadb-server-version="${primaryReplicaVersion}"
+            echo "Installed repo, now installing MariaDB-server" 
+            sudo yum -y install MariaDB-server
+            echo "Done installing MariaDB-server, now starting it" 
+            sleep 10
+            sudo systemctl start mariadb
+            sudo systemctl enable mariadb
+            echo "Done installing, starting and enabling MariaDB-server and installing MariaDB-backup " 
+            echo "Modifying mysql-clients.cnf file" 
+            sudo sed -i '4i [client]' /etc/my.cnf.d/mysql-clients.cnf
+            sudo sed -i '5i password=${primaryReplicaPassword}' /etc/my.cnf.d/mysql-clients.cnf
+            echo "Stopping and disabling firewalld" 
+            sudo systemctl stop firewalld
+            sudo systemctl disable firewalld 
+            echo "firewalld stopped and disabled" 
+            echo "Modifying server.cnf file" 
+            sudo sed -i 's/\[mariadb\]//' /etc/my.cnf.d/server.cnf
+            sudo echo "[mariadb]" >> /etc/my.cnf.d/server.cnf
+            sudo echo "#### REPLICA 1 SERVER CONFIGURATION" >> /etc/my.cnf.d/server.cnf
+            sudo echo "read-only" >> /etc/my.cnf.d/server.cnf
+            sudo echo "server_id = 2" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log_basename = replica1" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log-bin = /var/log/mariadb/replica1-bin" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log-bin-index = /var/log/mariadb/replica1-bin.index" >> /etc/my.cnf.d/server.cnf
+            sudo echo "binlog_format = ROW" >> /etc/my.cnf.d/server.cnf
+            sudo echo "expire_logs_days = 10" >> /etc/my.cnf.d/server.cnf
+            echo "Creating log directory and changing ownership to mysql" 
+            sudo mkdir /var/log/mariadb
+            sudo chown -R mysql:mysql /var/log/mariadb
+            echo "Restarting mariadb" 
+            sudo systemctl restart mariadb
+            echo "Loading dump file from primary" 
+            sudo mariadb < /tmp/fulldump.sql
+            echo "Get current GTID position from file sent from primary" 
+            currentPos=$(cat /tmp/primaryPos2.txt)
+            sudo chmod 777 /tmp/userEchos.txt
+            sudo echo "currentPos is on next line and is  " 
+            sudo cat /tmp/primaryPos2.txt 
+            sudo echo "currentPos from var is $(cat /tmp/primaryPos2.txt) " 
+            echo "Creating file to change master" 
+            sudo touch /tmp/repToPrimary.sql
+            sudo chmod 777 /tmp/repToPrimary.sql
+            sudo echo "CHANGE MASTER TO MASTER_HOST='${DemoIp1}', MASTER_USER='repuser', MASTER_PASSWORD='${primaryReplicaPassword}', MASTER_LOG_FILE='primary1-bin.000001', MASTER_LOG_POS=`cat /tmp/primaryPos2.txt`;" >> /tmp/repToPrimary.sql
+            sudo mariadb < /tmp/repToPrimary.sql
+            echo "Done replicating to primary now starting replica" 
+            echo "Creating file to start replica" 
+            sudo echo "START SLAVE;" >> /tmp/startReplica.sql
+            sudo mariadb < /tmp/startReplica.sql
+            echo "Created file and started replica" 
+            echo "Convert replica to use GTID protocol" 
+            echo "Creating file to stop replica" 
+            sudo echo "STOP SLAVE;" >> /tmp/stopReplica.sql
+            sudo mariadb < /tmp/stopReplica.sql
+            sudo echo "CHANGE MASTER TO MASTER_USE_GTID=slave_pos;" >> /tmp/changeToGTID.sql
+            sudo mariadb < /tmp/changeToGTID.sql
+            echo "Starting replica" 
+            sudo mariadb < /tmp/startReplica.sql
+            echo "DONE!" 
+
+  demoserver3:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdPriRep
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref DemoIp3
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: demoserver3
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            echo "Enable password authentication" 
+            sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            echo "Change ec2-user password" 
+            echo -e "${primaryReplicaPassword}\n${primaryReplicaPassword}" | sudo passwd ec2-user
+            echo "Changed ec2-user password" 
+            echo "restarting sshd" 
+            sudo systemctl restart sshd
+            echo "Installing mariadb enterprise" 
+            exec > >(tee /tmp/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            yum update -y
+            echo "Updated yum" 
+            echo "get private ip address" 
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip  
+            echo "Sleeping for 4 minutes" 
+            sleep 240
+            echo "Waking up after 4 minute sleep" 
+            sudo yum -y install wget
+            echo "Installed wget" 
+            wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            echo "Got repo and made it executable" 
+            ./mariadb_es_repo_setup --token=${primaryReplicaToken} --apply --mariadb-server-version="${primaryReplicaVersion}"
+            echo "Installed repo, now installing MariaDB-server" 
+            sudo yum -y install MariaDB-server
+            echo "Done installing MariaDB-server, now starting it" 
+            sleep 10
+            sudo systemctl start mariadb
+            sudo systemctl enable mariadb
+            echo "Done installing, starting and enabling MariaDB-server and installing MariaDB-backup " 
+            echo "Modifying mysql-clients.cnf file" 
+            sudo sed -i '4i [client]' /etc/my.cnf.d/mysql-clients.cnf
+            sudo sed -i '5i password=${primaryReplicaPassword}' /etc/my.cnf.d/mysql-clients.cnf
+            echo "Stopping and disabling firewalld" 
+            sudo systemctl stop firewalld
+            sudo systemctl disable firewalld 
+            echo "firewalld stopped and disabled" 
+            echo "Modifying server.cnf file" 
+            sudo sed -i 's/\[mariadb\]//' /etc/my.cnf.d/server.cnf
+            sudo echo "[mariadb]" >> /etc/my.cnf.d/server.cnf
+            sudo echo "#### REPLICA 3 SERVER CONFIGURATION" >> /etc/my.cnf.d/server.cnf
+            sudo echo "read-only" >> /etc/my.cnf.d/server.cnf
+            sudo echo "server_id = 3" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log_basename = replica2" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log-bin = /var/log/mariadb/replica2-bin" >> /etc/my.cnf.d/server.cnf
+            sudo echo "log-bin-index = /var/log/mariadb/replica2-bin.index" >> /etc/my.cnf.d/server.cnf
+            sudo echo "binlog_format = ROW" >> /etc/my.cnf.d/server.cnf
+            sudo echo "expire_logs_days = 10" >> /etc/my.cnf.d/server.cnf
+            echo "Creating log directory and changing ownership to mysql" 
+            sudo mkdir /var/log/mariadb
+            sudo chown -R mysql:mysql /var/log/mariadb
+            echo "Restarting mariadb" 
+            sudo systemctl restart mariadb
+            echo "Loading dump file from primary" 
+            sudo mariadb < /tmp/fulldump.sql
+            echo "Get current GTID position from file sent from primary" 
+            currentPos=$(cat /tmp/primaryPos2.txt)
+            sudo chmod 777 /tmp/userEchos.txt
+            sudo echo "currentPos is on next line and is  " 
+            sudo cat /tmp/primaryPos2.txt 
+            sudo echo "currentPos from var is $(cat /tmp/primaryPos2.txt) " 
+            echo "Creating file to change master" 
+            sudo touch /tmp/repToPrimary.sql
+            sudo chmod 777 /tmp/repToPrimary.sql
+            sudo echo "CHANGE MASTER TO MASTER_HOST='${DemoIp1}', MASTER_USER='repuser', MASTER_PASSWORD='${primaryReplicaPassword}', MASTER_LOG_FILE='primary1-bin.000001', MASTER_LOG_POS=`cat /tmp/primaryPos2.txt`;" >> /tmp/repToPrimary.sql
+            sudo mariadb < /tmp/repToPrimary.sql
+            echo "Done replicating to primary now starting replica" 
+            echo "Creating file to start replica" 
+            sudo echo "START SLAVE;" >> /tmp/startReplica.sql
+            sudo mariadb < /tmp/startReplica.sql
+            echo "Created file and started replica" 
+            echo "Convert replica to use GTID protocol" 
+            echo "Creating file to stop replica" 
+            sudo echo "STOP SLAVE;" >> /tmp/stopReplica.sql
+            sudo mariadb < /tmp/stopReplica.sql
+            sudo echo "CHANGE MASTER TO MASTER_USE_GTID=slave_pos;" >> /tmp/changeToGTID.sql
+            sudo mariadb < /tmp/changeToGTID.sql
+            echo "Starting replica" 
+            sudo mariadb < /tmp/startReplica.sql
+            echo "DONE!" 
+
+  demomaxscale:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdPriRep
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref DemoIpMaxScale
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: demomaxscale
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            echo "Enable password authentication" 
+            sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            echo "Change ec2-user password" 
+            echo -e "${primaryReplicaPassword}\n${primaryReplicaPassword}" | sudo passwd ec2-user
+            echo "Changed ec2-user password" 
+            echo "Installing MaxScale" 
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            echo "Updating yum" 
+            yum -y update
+            echo "Updated yum" 
+            echo "get private ip address" 
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip  
+            echo "Installing wget" 
+            sudo yum -y install wget
+            echo "Installing git" 
+            sudo yum -y install git
+            echo "Changing to home directory and cloning mariadb-training repo" 
+            cd /home/ec2-user
+            sudo git clone https://github.com/mariadb-corporation/mariadb-training.git
+            echo "Downloaded git project to home directory" 
+            echo "Download and set up MariaDB package repo with MaxScale Version ${primaryReplicaMaxScaleVersion}" 
+            curl -sS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup | sudo bash -s -- --mariadb-maxscale-version="${primaryReplicaMaxScaleVersion}"
+            echo "Install MaxScale MariaDB-client" 
+            yum -y install maxscale MariaDB-client
+            echo "Stopping and disabling firewalld" 
+            sudo systemctl stop firewalld
+            sudo systemctl disable firewalld 
+            echo "firewalld stopped and disabled" 
+            echo "Changing server1 IP address in maxscale config file" 
+            sudo sed -i 's/127.0.0.1/${DemoIp1}/g' /etc/maxscale.cnf
+            echo "Adding server2 info in maxscale config file" 
+            sudo echo  "[server2]" >> /etc/maxscale.cnf
+            sudo echo  "type=server" >> /etc/maxscale.cnf
+            sudo echo  "address=${DemoIp2}" >> /etc/maxscale.cnf
+            sudo echo  "port=3306" >> /etc/maxscale.cnf
+            sudo echo  "protocol=MariaDBBackend" >> /etc/maxscale.cnf
+            echo "Adding server3 info in maxscale config file" 
+            sudo echo  "[server3]" >> /etc/maxscale.cnf
+            sudo echo  "type=server" >> /etc/maxscale.cnf
+            sudo echo  "address=${DemoIp3}" >> /etc/maxscale.cnf
+            sudo echo  "port=3306" >> /etc/maxscale.cnf
+            sudo echo  "protocol=MariaDBBackend" >> /etc/maxscale.cnf
+            echo "Done adding entries to maxscale config file" 
+            echo "Edit /etc/maxscale.cnf file" 
+            sudo sed -i 's/servers=server1/servers=server1,server2,server3/' /etc/maxscale.cnf
+            sudo sed -i 's/user=myuser/user=maxuser/' /etc/maxscale.cnf
+            sudo sed -i 's/password=mypwd/password=${primaryReplicaPassword}/' /etc/maxscale.cnf
+            sudo sed -i 's/monitor_interval=2000/monitor_interval=5000/' /etc/maxscale.cnf
+            echo "Start and enable maxscale" 
+            sudo systemctl start maxscale
+            sudo systemctl enable maxscale
+            echo "Started and enabled maxscale" 
+
+  DemoSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow SSH access via port 22
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref MyIp
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref DemoIpRange
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          CidrIp: !Ref DemoIpRange
+      Tags:
+        - Key: Name
+          Value: SSH-SG
+
+  DemoHttpSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow HTTP access via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref MyIp
+      Tags:
+        - Key: Name
+          Value: SSH-HTTPD
+
+Outputs:
+  DemoInstanceId:
+    Description: Instance Id 
+    Value: !Ref demoserver1

@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to Create an EC2 instance in a VPC
+   
+Parameters:
+
+  ImageIdPriRep:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::ImageIdPriRep>'
+    Description: YOUR_IMAGE_ID
+    Default: ImageIdPriRep
+  VpcId:
+    Type: String
+    Description: VPC id
+    Default: vpc-07377e6c
+  SubnetId:
+    Type: String
+    Description: Subnet in which to launch an EC2
+    Default: subnet-06377e6d
+  AvailabilityZone:
+    Type: String
+    Description: Availability Zone into which instance will launch
+    Default: us-west-2a
+  InstanceType:
+    Type: String
+    Description: Instance type
+    Default: i3.4xlarge
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH Keypair to login to the instance
+    Default: mmalgeri777-keypair-mdb
+  MyIp:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::MyIp>'
+    Description: MY_IP
+    Default: MyIp
+  DemoIpRange:
+    Type: String
+    Description: Demo Ip Range
+    Default: 172.31.32.0/20
+  DemoIp1:
+    Type: String
+    Description: Demo Ip 1
+    Default: 172.31.42.77
+  primaryReplicaToken:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaToken>'
+    Description: YOUR_TOKEN
+    Default: primaryReplicaToken
+  primaryReplicaPassword:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaPassword>'
+    Description: YOUR_PASSWORD
+    Default: primaryReplicaPassword
+  primaryReplicaVersion:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::primaryReplicaVersion>'
+    Description: YOUR_MARIADB_VERSION
+    Default: primaryReplicaVersion
+
+Resources:
+  mariadb1:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdPriRep
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref DemoIp1
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: mariadb1
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            echo "Installing mariadb enterprise" 
+            yum update -y
+            echo "Updated yum" 
+            echo "get private ip address" 
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip  
+            sudo yum -y install wget
+            echo "Installed wget and now getting mariadb repo" 
+            wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            echo "Got repo and made it executable" 
+            ./mariadb_es_repo_setup --token=${primaryReplicaToken} --apply --mariadb-server-version="${primaryReplicaVersion}"
+            echo "Installed repo, now installing MariaDB-server" 
+            sudo yum -y install MariaDB-server
+            echo "Done installing MariaDB-server" 
+            sleep 10
+            sudo systemctl start mariadb
+            sudo systemctl enable mariadb
+
+            echo "Done installing, starting, and enabling MariaDB-server and installing MariaDB-backup " 
+            echo "Modifying mysql-clients.cnf file" 
+            sudo sed -i '4i [client]' /etc/my.cnf.d/mysql-clients.cnf
+            sudo sed -i '5i password=${primaryReplicaPassword}' /etc/my.cnf.d/mysql-clients.cnf
+
+            echo "Installing sshpass" 
+            sudo yum -y install sshpass
+            echo "Stopping and disabling firewalld" 
+            sudo systemctl stop firewalld
+            sudo systemctl disable firewalld 
+            echo "firewalld stopped and disabled" 
+            
+
+
+  DemoSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow SSH access via port 22
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref MyIp
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref DemoIpRange
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          CidrIp: !Ref DemoIpRange
+      Tags:
+        - Key: Name
+          Value: SSH-SG
+
+  DemoHttpSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow HTTP access via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref MyIp
+      Tags:
+        - Key: Name
+          Value: SSH-HTTPD
+
+Outputs:
+  DemoInstanceId:
+    Description: Instance Id 
+    Value: !Ref mariadb1

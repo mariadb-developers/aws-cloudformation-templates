@@ -1,0 +1,262 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to Create an EC2 instance in a VPC
+   
+Parameters:
+
+  ImageIdXpand:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::ImageIdXpand>'
+    Description: YOUR_IMAGE_ID
+    Default: ImageIdXpand
+  VpcId:
+    Type: String
+    Description: VPC id
+    Default: vpc-07377e6c
+  SubnetId:
+    Type: String
+    Description: Subnet in which to launch an EC2
+    Default: subnet-06377e6d
+  AvailabilityZone:
+    Type: String
+    Description: Availability Zone into which instance will launch
+    Default: us-west-2a
+  InstanceType:
+    Type: String
+    Description: Choosing  i3.4xlarge  because need nvme - cost 1.248/hr
+    Default: i3.4xlarge
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH Keypair to login to the instance
+    Default: mmalgeri777-keypair-mdb
+  MyIp:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::MyIp>'
+    Description: MY_IP
+    Default: MyIp
+  XpandIpRange:
+    Type: String
+    Description: Xpand Ip Range
+    Default: 172.31.32.0/20
+  xpandIp7:
+    Type: String
+    Description: Demo Xpand Ip 7
+    Default: 172.31.42.27
+  
+  xpandToken:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandToken>'
+    Description: YOUR_TOKEN
+    Default: xpandToken
+  xpandLicenseSignature:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseSignature>'
+    Description: YOUR_LICENSE_SIGNATURE
+    Default: xpandLicenseSignature
+  xpandLicenseEmail:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseEmail>'
+    Description: YOUR_LICENSE__EMAIL
+    Default: xpandLicenseEmail
+  xpandLicensePerson:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicensePerson>'
+    Description: YOUR_LICENSE_PERSON
+    Default: xpandLicensePerson
+  xpandLicenseCompany:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseCompany>'
+    Description: YOUR_LICENSE_COMPANY
+    Default: xpandLicenseCompany
+  xpandLicenseExpiration:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandLicenseExpiration>'
+    Description: YOUR_LICENSE_EXPIRATION
+    Default: xpandLicenseExpiration
+  xpandPassword:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandPassword>'
+    Description: YOUR_PASSWORD
+    Default: xpandPassword
+  xpandVersion:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandVersion>'
+    Description: YOUR_XPAND_VERSION
+    Default: xpandVersion
+  xpandVersionDir:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::KeyPair::xpandVersionDir>'
+    Description: YOUR_XPAND_VERSION_DIR
+    Default: xpandVersionDir
+
+Resources:
+  xpand7:
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      ImageId: !Ref ImageIdXpand
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          PrivateIpAddress: !Ref xpandIp7
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: 
+            - !Ref DemoSecurityGroup
+            - !Ref DemoHttpSecurityGroup
+      Tags:
+            - Key: Name
+              Value: xpand7
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+            echo "Change centos password" 
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd centos
+            
+            echo "Installing Xpand software"
+            yum -y update
+            echo "Updated yum"
+            echo "get private ip address"
+            ip=$(hostname -i)
+            echo "private address is " 
+            echo $ip 
+            sudo yum -y install  bzip2 mdadm nmap ntp ntpdate screen sysstat wget xz git
+            echo "Installed base level software on xpand7"
+
+            echo "Creating raid devices, filesystem, data directory, and mounting"
+            sudo mdadm --create /dev/md0 --level=0 --raid-devices=2 /dev/nvme0n1 /dev/nvme1n1
+            sudo mkfs.ext4 /dev/md0
+            sudo mkdir /data
+            sudo mount /dev/md0 /data
+            sudo echo "/dev/md0 /data ext4 defaults,noatime,nodiratime 0 1" >> /etc/fstab
+            sudo systemctl enable ntpd
+            sudo systemctl start ntpd
+            echo "Done creating raid devices, filesystem, data directory, and mounting"
+            echo "Also started ntpd"
+            echo "Getting xpand software"
+            sudo wget https://dlm.mariadb.com/${xpandToken}/xpand/${xpandVersionDir}/${xpandVersion}.tar.bz2
+            cd /
+            sudo tar xvf ${xpandVersion}.tar.bz2
+            cd /${xpandVersion}
+            sudo ./xpdnode_install.py -y
+            echo "Done running python install script. Can test GUI on port 8080"
+            echo "Now get mariadb repo"
+            cd /
+            sudo wget https://dlm.mariadb.com/enterprise-release-helpers/mariadb_es_repo_setup
+            sudo chmod +x mariadb_es_repo_setup
+            ./mariadb_es_repo_setup --token=${xpandToken} --apply --mariadb-server-version="10.6"
+            sudo yum -y install MariaDB-client
+
+            sudo chmod 777 /home/xpand/.bash_profile
+            sudo echo "PATH=$PATH:/opt/clustrix/bin; export PATH" >> /home/xpand/.bash_profile
+
+
+            echo "Change xpand user password"
+            echo -e "${xpandPassword}\n${xpandPassword}" | sudo passwd xpand
+            sudo chmod 777 /home/xpand
+
+
+            echo "Confirm SSH daemon configuration"
+            sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            sudo sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords no/g' /etc/ssh/sshd_config
+
+            sudo awk '/#PasswordAuthentication yes/{print "PubkeyAuthentication yes"}1' /etc/ssh/sshd_config > /tmp/sshd_config
+            sudo mv /tmp/sshd_config /etc/ssh
+
+            echo "Restarting sshd"
+            sudo systemctl restart sshd
+
+            echo "Installing expect"
+            sudo yum -y install expect
+
+            echo "Running an expect script to install public keys"
+            /usr/bin/expect -c '
+            expect <<- DONE
+            spawn clx pubkeyinstall
+            expect "?Enter SSH*"
+            send -- "${xpandPassword}\r"
+            expect eof
+            DONE'
+
+            echo "Done installing public keys"
+
+          
+  DemoSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow SSH access via port 22
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref MyIp
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '3581'
+          ToPort: '3581'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '8080'
+          ToPort: '8080'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '2048'
+          ToPort: '2048'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: udp
+          FromPort: '2048'
+          ToPort: '2048'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '2424'
+          ToPort: '2424'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: udp
+          FromPort: '2424'
+          ToPort: '2424'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '7888'
+          ToPort: '7888'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '3581'
+          ToPort: '3581'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '8989'
+          ToPort: '8989'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: tcp
+          FromPort: '24378'
+          ToPort: '24410'
+          CidrIp: !Ref XpandIpRange
+        - IpProtocol: udp
+          FromPort: '24378'
+          ToPort: '24410'
+          CidrIp: !Ref XpandIpRange
+      Tags:
+        - Key: Name
+          Value: SSH-SG
+
+  DemoHttpSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: SG to allow HTTP access via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref MyIp
+        - IpProtocol: tcp
+          FromPort: '8080'
+          ToPort: '8080'
+          CidrIp: !Ref MyIp
+      Tags:
+        - Key: Name
+          Value: SSH-HTTPD
+
+Outputs:
+  DemoInstanceId:
+    Description: Instance Id 
+    Value: !Ref xpand7
